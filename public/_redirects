@@ -1,2 +1,2 @@
-# 将所有请求重定向到新域名下的相同路径，使用301永久重定向
-/* https://wiki.leukeen.cn/:splat 301
+# 将所有请求重写到 /new-index.html 文件
+/* /new-index.html 200
