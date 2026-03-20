@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>本地文本加密工具 (AES-256-GCM)</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            background: #f5f7fa;
+            color: #1e293b;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h2 {
+            margin-top: 0;
+            font-weight: 500;
+            color: #0f172a;
+        }
+        label {
+            font-weight: 500;
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 1rem;
+            box-sizing: border-box;
+            margin-bottom: 1.5rem;
+            font-family: inherit;
+        }
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+        button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 0.8rem 2rem;
+            font-size: 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        .result {
+            margin-top: 2rem;
+            padding: 1.5rem;
+            background: #f8fafc;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+        .result-item {
+            margin-bottom: 1.2rem;
+        }
+        .result-item strong {
+            display: block;
+            margin-bottom: 0.3rem;
+            font-size: 0.9rem;
+            color: #475569;
+        }
+        .result-item pre {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 0.8rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            word-break: break-all;
+            white-space: pre-wrap;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+        }
+        .copy-btn {
+            background: #475569;
+            margin-right: 0.5rem;
+            padding: 0.4rem 1rem;
+            font-size: 0.9rem;
+        }
+        .copy-btn:hover {
+            background: #334155;
+        }
+        .note {
+            font-size: 0.9rem;
+            color: #64748b;
+            margin-top: 1rem;
+            border-top: 1px dashed #cbd5e1;
+            padding-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔐 本地文本加密 (AES-256-GCM + PBKDF2)</h2>
+        <p style="margin-bottom: 1.5rem; color: #475569;">用于生成与 MediaWiki 解密脚本兼容的密文。所有计算均在本地进行，不会上传任何数据。</p>
+        
+        <label for="password">密码 (加密密钥)</label>
+        <input type="password" id="password" placeholder="请输入强密码" autocomplete="off">
+        
+        <label for="plaintext">要加密的明文</label>
+        <textarea id="plaintext" placeholder="请输入需要加密的内容..."></textarea>
+        
+        <button id="encryptBtn">加密</button>
+        
+        <div class="result" id="resultArea" style="display: none;">
+            <h3 style="margin-top: 0;">加密结果 (Base64)</h3>
+            <p style="color: #64748b; margin-bottom: 1rem;">将这些数据复制到 MediaWiki 页面的隐藏 <code>&lt;div&gt;</code> 中。</p>
+            
+            <div class="result-item">
+                <strong>盐 (salt)</strong>
+                <pre id="saltResult"></pre>
+                <button class="copy-btn" data-copy="salt">复制盐</button>
+            </div>
+            
+            <div class="result-item">
+                <strong>初始化向量 (iv)</strong>
+                <pre id="ivResult"></pre>
+                <button class="copy-btn" data-copy="iv">复制 IV</button>
+            </div>
+            
+            <div class="result-item">
+                <strong>密文 (ciphertext)</strong>
+                <pre id="ciphertextResult"></pre>
+                <button class="copy-btn" data-copy="ciphertext">复制密文</button>
+            </div>
+            
+            <div class="note">
+                ⚠️ 请妥善保管密码！丢失无法找回。每次加密会生成随机盐和 IV，相同的明文每次结果不同。
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            const encryptBtn = document.getElementById('encryptBtn');
+            const passwordInput = document.getElementById('password');
+            const plaintextInput = document.getElementById('plaintext');
+            const resultArea = document.getElementById('resultArea');
+            const saltPre = document.getElementById('saltResult');
+            const ivPre = document.getElementById('ivResult');
+            const cipherPre = document.getElementById('ciphertextResult');
+
+            // 工具函数：ArrayBuffer 转 Base64
+            function bufferToBase64(buffer) {
+                const bytes = new Uint8Array(buffer);
+                let binary = '';
+                for (let i = 0; i < bytes.byteLength; i++) {
+                    binary += String.fromCharCode(bytes[i]);
+                }
+                return btoa(binary);
+            }
+
+            // 工具函数：生成随机字节
+            function getRandomBytes(length) {
+                const buffer = new Uint8Array(length);
+                crypto.getRandomValues(buffer);
+                return buffer.buffer;
+            }
+
+            // 加密主函数
+            async function encrypt() {
+                const password = passwordInput.value;
+                const plaintext = plaintextInput.value;
+
+                if (!password) {
+                    alert('请输入密码');
+                    return;
+                }
+                if (!plaintext) {
+                    alert('请输入要加密的文本');
+                    return;
+                }
+
+                // 显示加密中状态
+                encryptBtn.disabled = true;
+                encryptBtn.textContent = '加密中...';
+
+                try {
+                    // 1. 生成随机盐 (16字节) 和 IV (12字节，GCM推荐)
+                    const salt = getRandomBytes(16);
+                    const iv = getRandomBytes(12);
+
+                    // 2. 将密码转换为密钥材料
+                    const enc = new TextEncoder();
+                    const passwordBuffer = enc.encode(password);
+                    const keyMaterial = await crypto.subtle.importKey(
+                        'raw',
+                        passwordBuffer,
+                        'PBKDF2',
+                        false,
+                        ['deriveKey']
+                    );
+
+                    // 3. 派生 AES-GCM 密钥 (256位)
+                    const key = await crypto.subtle.deriveKey(
+                        {
+                            name: 'PBKDF2',
+                            salt: salt,
+                            iterations: 100000,      // 与解密脚本一致
+                            hash: 'SHA-256'
+                        },
+                        keyMaterial,
+                        { name: 'AES-GCM', length: 256 },
+                        false,
+                        ['encrypt']
+                    );
+
+                    // 4. 加密明文
+                    const plaintextBuffer = enc.encode(plaintext);
+                    const ciphertext = await crypto.subtle.encrypt(
+                        {
+                            name: 'AES-GCM',
+                            iv: iv
+                        },
+                        key,
+                        plaintextBuffer
+                    );
+
+                    // 5. 转换为 Base64
+                    const saltBase64 = bufferToBase64(salt);
+                    const ivBase64 = bufferToBase64(iv);
+                    const cipherBase64 = bufferToBase64(ciphertext);
+
+                    // 6. 显示结果
+                    saltPre.textContent = saltBase64;
+                    ivPre.textContent = ivBase64;
+                    cipherPre.textContent = cipherBase64;
+                    resultArea.style.display = 'block';
+
+                } catch (error) {
+                    console.error(error);
+                    alert('加密失败：' + error.message);
+                } finally {
+                    encryptBtn.disabled = false;
+                    encryptBtn.textContent = '加密';
+                }
+            }
+
+            encryptBtn.addEventListener('click', encrypt);
+
+            // 复制按钮功能
+            document.querySelectorAll('.copy-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const target = e.target.getAttribute('data-copy');
+                    let textToCopy = '';
+                    if (target === 'salt') textToCopy = saltPre.textContent;
+                    else if (target === 'iv') textToCopy = ivPre.textContent;
+                    else if (target === 'ciphertext') textToCopy = cipherPre.textContent;
+
+                    if (!textToCopy) return;
+
+                    navigator.clipboard.writeText(textToCopy).then(() => {
+                        const originalText = e.target.textContent;
+                        e.target.textContent = '已复制!';
+                        setTimeout(() => {
+                            e.target.textContent = originalText;
+                        }, 1500);
+                    }).catch(() => {
+                        alert('复制失败，请手动选择复制');
+                    });
+                });
+            });
+        })();
+    </script>
+</body>
+</html>
